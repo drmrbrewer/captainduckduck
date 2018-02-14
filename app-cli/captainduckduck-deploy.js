@@ -28,6 +28,11 @@ console.log(' ');
 program
     .description('Deploy current directory to a Captain machine.')
     .option('-d, --default', 'Run with default options')
+    .option('-s, --stateless', 'Run deploy stateless')
+    .option('-h, --host <value>', 'Only for stateless mode: Host of the captain machine')
+    .option('-a, --appName <value>', 'Only for stateless mode: Name of the app')
+    .option('-p, --pass <value>', 'Only for stateless mode: Password for Captain')
+    .option('-b, --branch [value]', 'Only for stateless mode: Branch name (default master)')
     .parse(process.argv);
 
 
@@ -55,8 +60,8 @@ if (!fs.pathExistsSync('./captain-definition')) {
     printErrorAndExit('**** ERROR: captain-definition file cannot be found. Please see docs! ****');
 }
 
-var contents = fs.readFileSync('./captain-definition', 'utf8');
-var contentsJson = null;
+const contents = fs.readFileSync('./captain-definition', 'utf8');
+let contentsJson = null;
 
 try {
     contentsJson = JSON.parse(contents);
@@ -134,6 +139,9 @@ function getDefaultMachine() {
     if (machine) {
         return machine.name;
     }
+    if (listOfMachines.length == 2) {
+        return 1;
+    }
     return EMPTY_STRING;
 }
 
@@ -170,7 +178,7 @@ const questions = [
     {
         type: 'confirm',
         name: 'confirmedToDeploy',
-        message: 'Note that uncommited files and files in gitignore (if any) will not be pushed to server. Please confirm so that deployment process can start.',
+        message: 'Note that uncommitted files and files in gitignore (if any) will not be pushed to server. Please confirm so that deployment process can start.',
         default: true,
         when: function (answers) {
             return !!answers.captainNameToDeploy;
@@ -193,7 +201,21 @@ if (program.default) {
 
 }
 
-if (!program.default || defaultInvalid) {
+const isStateless = program.stateless && program.host && program.appName && program.pass;
+
+if (isStateless) {
+    // login first
+    console.log('Trying to login to', program.host)
+    requestLoginAuth(program.host, program.pass, function (authToken) {
+        // deploy
+        console.log('Starting stateless deploy to', program.host, program.branch, program.appName);
+        deployTo({
+            baseUrl: program.host,
+            authToken,
+        }, program.branch || 'master', program.appName);
+    });
+}
+else if (!program.default || defaultInvalid) {
 
     inquirer.prompt(questions).then(function (answers) {
 
@@ -222,6 +244,8 @@ if (!program.default || defaultInvalid) {
     });
 
 }
+
+
 
 function deployTo(machineToDeploy, branchToPush, appName) {
     if (!commandExistsSync('git')) {
@@ -345,7 +369,7 @@ function sendFileToCaptain(machineToDeploy, zipFileFullPath, appName, gitHash, b
                 savePropForDirectory(MACHINE_TO_DEPLOY, machineToDeploy);
 
                 if (data.status === 100) {
-                    console.log(chalk.green('Deployed successful: ') + appName);
+                    console.log(chalk.green('Deployed successfully: ') + appName);
                     console.log(' ');
                 } else if (data.status === 101) {
                     console.log(chalk.green('Building started: ') + appName);
@@ -431,8 +455,10 @@ function startFetchingBuildLogs(machineToDeploy, appName) {
         if (data && !data.isAppBuilding) {
             console.log(' ');
             if (!data.isBuildFailed) {
-                console.log(chalk.green('Deployed successful: ') + appName);
-                console.log(chalk.magenta('App is available at ') + (machineToDeploy.baseUrl.replace('//captain.', '//' + appName + '.')));
+                console.log(chalk.green('Deployed successfully: ') + appName);
+                console.log(chalk.magenta('App is available at ')
+                    + (machineToDeploy.baseUrl.replace('//captain.', '//' + appName + '.').replace('https://', 'http://'))
+                );
             } else {
                 console.error(chalk.red('\nSomething bad happened. Cannot deploy "' + appName + '"\n'));
             }
@@ -475,6 +501,68 @@ function startFetchingBuildLogs(machineToDeploy, appName) {
 
             onLogRetrieved(null);
         }
+    }
+
+    request(options, callback);
+}
+
+function requestLoginAuth(serverAddress, password, authCallback) {
+    let options = {
+        url: serverAddress + '/api/v1/login',
+        headers: {
+            'x-namespace': 'captain'
+        },
+        method: 'POST',
+        form: {
+            password: password
+        }
+    };
+
+    function callback(error, response, body) {
+
+        try {
+
+            if (!error && response.statusCode === 200) {
+
+                let data = JSON.parse(body);
+
+                if (data.status !== 100) {
+                    throw new Error(JSON.stringify(data, null, 2));
+                }
+
+                authCallback(data.token);
+
+                return;
+            }
+
+            if (error) {
+                throw new Error(error)
+            }
+
+            throw new Error(response ? JSON.stringify(response, null, 2) : 'Response NULL');
+
+        } catch (error) {
+
+            if (error.message) {
+                try {
+                    var errorObj = JSON.parse(error.message);
+                    if (errorObj.status) {
+                        console.error(chalk.red('\nError code: ' + errorObj.status));
+                        console.error(chalk.red('\nError message:\n\n ' + errorObj.description));
+                    } else {
+                        throw new Error("NOT API ERROR");
+                    }
+                } catch (ignoreError) {
+                    console.error(chalk.red(error.message));
+                }
+            } else {
+                console.error(chalk.red(error));
+            }
+            console.log(' ');
+
+        }
+
+        process.exit(0);
     }
 
     request(options, callback);

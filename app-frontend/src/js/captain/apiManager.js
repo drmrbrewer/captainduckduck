@@ -294,7 +294,7 @@
 
                 $http({
                     method: 'POST',
-                    url: BASE_API + 'user/appData/' + appName,
+                    url: BASE_API + 'user/appData/' + appName + '?detached=1',
                     headers: headers,
                     data: {
                         sourceFile: file
@@ -336,6 +336,17 @@
                     .post(BASE_API + 'user/appDefinitions/delete', {
                         appName: appName
                     }, createConfig())
+                    .then(
+                    function (response) {
+                        callback(response.data);
+                    },
+                    function () {
+                        callback(null);
+                    });
+            },
+            fetchBuildLogs: function (appName, callback) {
+                $http
+                    .get(BASE_API + 'user/appData/' + appName, createConfig())
                     .then(
                     function (response) {
                         callback(response.data);
